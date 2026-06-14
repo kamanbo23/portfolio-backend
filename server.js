@@ -28,7 +28,9 @@ const corsOptions = {
       'http://localhost:8000',
       'http://localhost:3000',
       'https://lokeshkamanboina.netlify.app',
+      'https://lokesh.netlify.app',
       /\.netlify\.app$/,  // Allow any Netlify subdomain
+      'file://',  // Allow local file access for testing
     ];
 
     const isAllowed = allowedOrigins.some(allowed => {
