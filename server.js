@@ -73,7 +73,10 @@ async function initDB() {
         color VARCHAR(20) DEFAULT '#f4f4f2',
         session VARCHAR(100),
         created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        hidden BOOLEAN DEFAULT FALSE
+        approved BOOLEAN DEFAULT FALSE,
+        reviewed BOOLEAN DEFAULT FALSE,
+        hidden BOOLEAN DEFAULT FALSE,
+        ip_hash VARCHAR(64)
       )
     `);
 
@@ -197,14 +200,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get marks (with pagination)
-app.get('/marks', async (req, res) => {
+// Admin endpoint to get all marks (protected)
+app.get('/admin/marks', async (req, res) => {
   try {
+    const adminKey = req.headers['x-admin-key'];
+    if (process.env.NODE_ENV === 'production' && adminKey !== process.env.ADMIN_KEY) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
     const since = req.query.since || '1970-01-01';
     const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
 
     const result = await pool.query(
-      `SELECT id, type, pts, x, y, text, color, session, created
+      `SELECT id, type, pts, x, y, text, color, session, created, ip_hash
        FROM marks
        WHERE hidden = false AND created > $1
        ORDER BY created DESC
@@ -219,7 +227,7 @@ app.get('/marks', async (req, res) => {
   }
 });
 
-// Create a new mark
+// Create a new mark (saves privately for admin)
 app.post('/marks', limiter, async (req, res) => {
   try {
     const mark = validateMark(req.body);
@@ -229,10 +237,13 @@ app.post('/marks', limiter, async (req, res) => {
       mark.session = req.ip || 'anonymous';
     }
 
+    // Hash IP for privacy
+    const ipHash = crypto.createHash('sha256').update(req.ip || 'unknown').digest('hex');
+
     const result = await pool.query(
-      `INSERT INTO marks (type, pts, x, y, text, color, session)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, type, pts, x, y, text, color, session, created`,
+      `INSERT INTO marks (type, pts, x, y, text, color, session, ip_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, created`,
       [
         mark.type,
         mark.type === 'pen' ? JSON.stringify(mark.pts) : null,
@@ -240,11 +251,16 @@ app.post('/marks', limiter, async (req, res) => {
         mark.type === 'text' ? mark.y : null,
         mark.type === 'text' ? mark.text : null,
         mark.color || '#f4f4f2',
-        mark.session
+        mark.session,
+        ipHash
       ]
     );
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({
+      id: result.rows[0].id,
+      message: 'Thank you! Your message has been saved for Lokesh.',
+      success: true
+    });
   } catch (err) {
     console.error('Error creating mark:', err);
     res.status(400).json({ error: err.message || 'Failed to create mark' });
@@ -266,7 +282,7 @@ app.post('/report/:id', async (req, res) => {
   }
 });
 
-// Admin endpoint to hide/delete marks (protect this in production!)
+// Admin endpoint to hide/delete a specific mark
 app.delete('/admin/marks/:id', async (req, res) => {
   try {
     // In production, add authentication here
